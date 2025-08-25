@@ -1,0 +1,436 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <title>Job Schema Viewer</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background: #f7f9fc;
+      padding: 20px;
+      margin: 0;
+      color: #333;
+      overflow-x: hidden;
+      /* horizontal scroll hata diya */
+    }
+
+    h1 {
+      text-align: center;
+      margin-bottom: 30px;
+    }
+
+    /* Job cards list - ek ke niche ek */
+    .schema-list {
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+      max-width: 1000px;
+      margin: 0 auto;
+    }
+
+    /* Org + Website ek line me */
+    .org-web-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+      width: 100%;
+    }
+
+    .card {
+      background: #fff;
+      border-radius: 10px;
+      padding: 20px;
+      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
+      display: flex;
+      flex-direction: column;
+      width: 100%;
+      /* full width card */
+    }
+
+    .card h2 {
+      font-size: 18px;
+      color: #0073e6;
+      margin-bottom: 15px;
+      text-align: left;
+    }
+
+    .card h3 {
+      font-size: 14px;
+      color: #666;
+      margin-bottom: 10px;
+      text-align: left;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+    }
+
+    td {
+      padding: 4px 6px;
+      border-bottom: 1px solid #eee;
+      vertical-align: top;
+    }
+
+    td.key {
+      font-weight: bold;
+      color: #444;
+      width: 120px;
+    }
+
+    .nested {
+      margin-left: 10px;
+      border-left: 2px solid #ddd;
+      padding-left: 6px;
+    }
+
+    .null-value {
+      color: #999;
+      font-style: italic;
+    }
+
+    .loading {
+      text-align: center;
+      font-size: 18px;
+      color: #666;
+    }
+
+    /* Separator line */
+    .separator {
+      border: none;
+      border-top: 2px solid #ccc;
+      margin: 30px 0;
+    }
+
+    .url-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+
+    .url-actions a {
+      font-size: 14px;
+      color: #0073e6;
+      text-decoration: none;
+    }
+
+    .copy-btn {
+      cursor: pointer;
+      font-size: 16px;
+    }
+  </style>
+</head>
+
+<body>
+  <h1>Job Schema Viewer</h1>
+  <div id="schema-list" class="schema-list">
+    <div class="loading">Loading job schemas...</div>
+  </div>
+
+  <script>
+    const UNWANTED_CHARS_PATTERN = /[^a-zA-Z0-9\s/-]/g;
+    const SLASH_PATTERN = /\//g;
+    const MULTIPLE_SPACES_PATTERN = /\s+/g;
+    const SPACE_BEFORE_DASH_PATTERN = /\s+-/g;
+    const MULTIPLE_DASHES_PATTERN = /-+/g;
+    const LEADING_TRAILING_DASHES_PATTERN = /^[-]+|[-]+$/g;
+
+    const DASH_REPLACEMENT = '-';
+    const SINGLE_SPACE_REPLACEMENT = ' ';
+    const EMPTY_STRING_REPLACEMENT = '';
+
+    const organizationSchema = {
+      "@context": "https://schema.org",
+      "@type": "Organization",
+      "name": "EnergyHire",
+      "url": "https://www.energyhire.com/",
+      "logo": "https://www.energyhire.com/logos/eh_logo.svg",
+      "description": "EnergyHire connects professionals with renewable and traditional energy jobs and careers.",
+      "sameAs": ["https://www.linkedin.com/company/energy-hirellc/"],
+      "address": {
+        "@type": "PostalAddress",
+        "streetAddress": "3305 Northland Dr, Suite 201",
+        "addressLocality": "Austin",
+        "addressRegion": "TX",
+        "postalCode": "78731",
+        "addressCountry": "US"
+      },
+      "contactPoint": [
+        {
+          "@type": "ContactPoint",
+          "telephone": "+1 512-265-5205",
+          "contactType": "customer service",
+          "email": "support@energyhire.com"
+        }
+      ]
+    };
+
+    const webSiteSchema = {
+      "@context": "https://schema.org",
+      "@type": "WebSite",
+      "name": "EnergyHire",
+      "url": "https://energyhire.com/"
+    };
+
+    function calculateJobExpiryDate(datePosted, jobExpiryDate) {
+      if (jobExpiryDate) {
+        return new Date(jobExpiryDate).toISOString();
+      }
+      const postedDate = new Date(datePosted);
+      const defaultExpiryDate = new Date(postedDate.setDate(postedDate.getDate() + 30));
+      return defaultExpiryDate.toISOString();
+    }
+
+    function mapEmploymentTypes(types) {
+      if (!types) return [];
+      const typeMap = {
+        'Full-time': 'FULL_TIME',
+        'Part-time': 'PART_TIME',
+        'Contract': 'CONTRACTOR',
+        'Temporary': 'TEMPORARY',
+        'Internship': 'INTERN',
+        'Volunteer': 'VOLUNTEER',
+        'Per Diem': 'PER_DIEM',
+        'Other': 'OTHER',
+      };
+      return Array.isArray(types) ? types.map(type => typeMap[type] || 'OTHER') : [typeMap[types] || 'OTHER'];
+    }
+
+    function getCity(job_details) {
+      return job_details?.city || job_details?.company_object?.city || null;
+    }
+    function getState(job_details) {
+      return job_details?.scraped_data?.state_code || job_details?.state || null;
+    }
+    function getCountry(job_details) {
+      return job_details?.country_code || job_details?.company_object?.country_code || null;
+    }
+    function getPostalCode(job_details) {
+      return job_details?.scraped_data?.postal_code || null;
+    }
+    function getBaseSalary({ avg_annual_salary_usd = 0, min_annual_salary_usd = 0, max_annual_salary_usd = 0 }) {
+      return (
+        parseFloat(avg_annual_salary_usd) ||
+        parseFloat(min_annual_salary_usd) ||
+        parseFloat(max_annual_salary_usd) ||
+        undefined
+      );
+    }
+
+    const generateFormattedLocationForUrl = (city, state) => {
+      if (state && state.includes(',')) state = state.split(',')[1].trim();
+      return `${(city || '')}${(city && state) ? '-' : ''}${(state || '')}`.replace(/[^a-zA-Z0-9-]+/g, '-').toLowerCase().replace(/^-+|-+$/g, '');
+    };
+
+    const formatText = (input) => {
+      return input
+        ?.replace(UNWANTED_CHARS_PATTERN, EMPTY_STRING_REPLACEMENT)
+        .replace(SLASH_PATTERN, DASH_REPLACEMENT)
+        .replace(MULTIPLE_SPACES_PATTERN, SINGLE_SPACE_REPLACEMENT)
+        .replace(SPACE_BEFORE_DASH_PATTERN, DASH_REPLACEMENT)
+        .replace(MULTIPLE_SPACES_PATTERN, DASH_REPLACEMENT)
+        .replace(MULTIPLE_DASHES_PATTERN, DASH_REPLACEMENT)
+        .toLowerCase()
+        .replace(LEADING_TRAILING_DASHES_PATTERN, EMPTY_STRING_REPLACEMENT);
+    }
+
+    function createJobPostingSchema(job_details) {
+      const datePosted = job_details.date_posted ? new Date(job_details.date_posted).toISOString().split('T')[0] : null;
+      const {
+        avg_annual_salary_usd = 0,
+        min_annual_salary_usd = 0,
+        max_annual_salary_usd = 0,
+        salary_currency = 'USD',
+      } = job_details || {};
+      const baseSalaryValue = getBaseSalary({ avg_annual_salary_usd, min_annual_salary_usd, max_annual_salary_usd });
+      const baseSalary = baseSalaryValue ? {
+        '@type': 'MonetaryAmount',
+        currency: salary_currency,
+        value: {
+          '@type': 'QuantitativeValue',
+          value: baseSalaryValue,
+          unitText: 'YEAR',
+        },
+      } : undefined;
+
+      const location = generateFormattedLocationForUrl(job_details?.city || EMPTY_STRING, job_details?.state || EMPTY_STRING);
+      const formattedTitle = formatText(job_details?.title || EMPTY_STRING);
+      const jobIdIdentifier = `${formattedTitle}${location ? `-${location}` : ''}-${job_details?.id}`;
+
+      return {
+        '@context': 'https://schema.org',
+        '@type': 'JobPosting',
+        title: job_details.title || 'Untitled',
+        description: job_details.description || 'No description provided',
+        identifier: {
+          '@type': 'PropertyValue',
+          name: job_details.company_name?.trim() || 'Unknown Company',
+          value: jobIdIdentifier || 'N/A',
+        },
+        datePosted: datePosted,
+        validThrough: calculateJobExpiryDate(datePosted, job_details?.job_expiry_date),
+        hiringOrganization: {
+          '@type': 'Organization',
+          name: job_details.company_name?.trim() || 'Unknown',
+          sameAs: job_details.company_url || null,
+          logo: job_details.company_logo || null,
+        },
+        jobLocation: {
+          '@type': 'Place',
+          address: {
+            '@type': 'PostalAddress',
+            addressLocality: getCity(job_details),
+            addressRegion: getState(job_details),
+            addressCountry: getCountry(job_details),
+            postalCode: getPostalCode(job_details),
+          },
+        },
+        employmentType: mapEmploymentTypes(job_details.employment_type),
+        ...(baseSalary && { baseSalary }),
+      };
+    }
+
+    function renderObject(obj, container) {
+      const table = document.createElement("table");
+      Object.entries(obj).forEach(([key, value]) => {
+        const row = document.createElement("tr");
+        const tdKey = document.createElement("td");
+        tdKey.textContent = key;
+        tdKey.className = "key";
+
+        const tdValue = document.createElement("td");
+        if (value === null || value === undefined) {
+          tdValue.textContent = 'null';
+          tdValue.className = 'null-value';
+        } else if (typeof value === "object" && !Array.isArray(value)) {
+          const nestedDiv = document.createElement("div");
+          nestedDiv.className = "nested";
+          renderObject(value, nestedDiv);
+          tdValue.appendChild(nestedDiv);
+        } else if (Array.isArray(value)) {
+          if (value.length === 0) {
+            tdValue.textContent = '[]';
+          } else if (typeof value[0] === 'object') {
+            // Handle array of objects
+            const nestedDiv = document.createElement("div");
+            nestedDiv.className = "nested";
+            value.forEach((item, index) => {
+              const itemDiv = document.createElement("div");
+              itemDiv.style.marginBottom = "10px";
+              const itemLabel = document.createElement("strong");
+              itemLabel.textContent = `Item ${index + 1}:`;
+              itemLabel.style.color = "#0073e6";
+              itemDiv.appendChild(itemLabel);
+              renderObject(item, itemDiv);
+              nestedDiv.appendChild(itemDiv);
+            });
+            tdValue.appendChild(nestedDiv);
+          } else {
+            tdValue.textContent = value.join(", ");
+          }
+        } else {
+          tdValue.textContent = value;
+        }
+        row.appendChild(tdKey);
+        row.appendChild(tdValue);
+        table.appendChild(row);
+      });
+      container.appendChild(table);
+    }
+
+    function createSchemaCard(name, schema, subtitle = '', jobIdIdentifier = null) {
+      const card = document.createElement("div");
+      card.className = "card";
+
+      const header = document.createElement("div");
+      header.style.display = "flex";
+      header.style.justifyContent = "space-between";
+      header.style.alignItems = "center";
+
+      const title = document.createElement("h2");
+      title.textContent = name;
+      header.appendChild(title);
+
+      if (jobIdIdentifier) {
+        const jobUrl = `https://app.energyhire.com/job-board/${jobIdIdentifier}`;
+        const urlDiv = document.createElement("div");
+        urlDiv.className = "url-actions";
+
+        const link = document.createElement("a");
+        link.href = jobUrl;
+        link.textContent = "Job Link";
+        link.target = "_blank";
+
+        const copyBtn = document.createElement("span");
+        copyBtn.textContent = "📋";
+        copyBtn.className = "copy-btn";
+        copyBtn.onclick = () => {
+          navigator.clipboard.writeText(jobUrl).then(() => {
+            copyBtn.textContent = "✅";
+            setTimeout(() => (copyBtn.textContent = "📋"), 1500);
+          });
+        };
+
+        urlDiv.appendChild(link);
+        urlDiv.appendChild(copyBtn);
+        header.appendChild(urlDiv);
+      }
+
+      card.appendChild(header);
+
+      if (subtitle) {
+        const subtitleEl = document.createElement("h3");
+        subtitleEl.textContent = subtitle;
+        card.appendChild(subtitleEl);
+      }
+
+      renderObject(schema, card);
+      return card;
+    }
+
+    async function loadJobsData() {
+      try {
+        const response = await fetch('jobs18.json');
+        const jobs = await response.json();
+
+        const schemaList = document.getElementById("schema-list");
+        schemaList.innerHTML = '';
+
+        const orgWebRow = document.createElement("div");
+        orgWebRow.className = "org-web-row";
+        orgWebRow.appendChild(createSchemaCard('Organization', organizationSchema, 'EnergyHire Company Schema'));
+        orgWebRow.appendChild(createSchemaCard('WebSite', webSiteSchema, 'EnergyHire Website Schema'));
+        schemaList.appendChild(orgWebRow);
+
+        const separator = document.createElement("hr");
+        separator.className = "separator";
+        schemaList.appendChild(separator);
+
+        jobs.forEach((job, index) => {
+          const jobSchema = createJobPostingSchema(job);
+          const jobIdIdentifier = jobSchema?.identifier?.value || null;
+
+          const card = createSchemaCard(
+            `JobPosting ${index + 1}`,
+            jobSchema,
+            `${job.title || 'Untitled'} at ${job.company_name || 'Unknown Company'}`,
+            jobIdIdentifier
+          );
+          schemaList.appendChild(card);
+        });
+
+      } catch (error) {
+        console.error('Error loading jobs data:', error);
+        document.getElementById("schema-list").innerHTML =
+          '<div class="loading">Error loading jobs data. Please check if jobs.json exists.</div>';
+      }
+    }
+
+    document.addEventListener('DOMContentLoaded', loadJobsData);
+  </script>
+</body>
+
+</html>
